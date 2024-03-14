@@ -152,7 +152,8 @@ def run_one_epoch(epoch, model, opt, dl, tl):
     model.train()
 
     # train
-    for x, y in tqdm.tqdm(dl, total=len(dl)):
+
+    for x, y in tqdm.tqdm(dl, total=len(dl), ncols=0):
         preds = model(x, y)
         losses = sum(loss for loss in preds.values())
         train_loss_arr.append(losses.item())
@@ -162,7 +163,7 @@ def run_one_epoch(epoch, model, opt, dl, tl):
 
     # test
     with torch.no_grad():
-        for x, y in tqdm.tqdm(tl, total=len(tl)):
+        for x, y in tqdm.tqdm(tl, total=len(tl), ncols=0):
             preds = model(x, y)
             losses = sum(loss for loss in preds.values())
             test_loss_arr.append(losses.item())
@@ -177,7 +178,7 @@ def run_epochs(num_epochs=100):
     all_epoch_train_losses = []
     all_epoch_test_losses = []
 
-    opt = torch.optim.Adam(model.parameters())
+    opt = torch.optim.Adam(model.parameters(), lr=1e-5)
     for epoch in range(num_epochs):
         train_loss_arr, test_loss_arr = run_one_epoch(epoch, model, opt, dl,
                                                       tl)
@@ -186,8 +187,8 @@ def run_epochs(num_epochs=100):
         all_epoch_train_losses.append(avg_train_loss)
         all_epoch_test_losses.append(avg_test_loss)
 
-        print(f"{epoch} train loss: {avg_train_loss:0.4f}")
-        print(f"{epoch} test loss: {avg_test_loss:0.4f}")
+        print(f"{epoch} train loss: {avg_train_loss:0.4f},"
+              f" test loss: {avg_test_loss:0.4f}")
 
         with open("train_losses.pkl", "wb") as fd:
             pickle.dump(all_epoch_train_losses, fd)

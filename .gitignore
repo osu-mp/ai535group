@@ -3,3 +3,4 @@
 /annotations/
 /images.tar.gz
 /images/
+/__pycache__/

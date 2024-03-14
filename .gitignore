@@ -4,3 +4,5 @@
 /images.tar.gz
 /images/
 /__pycache__/
+/checkpoint*
+/*.pkl

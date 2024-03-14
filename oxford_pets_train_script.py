@@ -21,7 +21,11 @@ device = "cuda" if torch.cuda.is_available() else "cpu"
 
 class PetDataset(Dataset):
 
-    def __init__(self, root_dir, xforms, yforms, augs):
+    def __init__(self,
+                 root_dir,
+                 xforms=transforms.Compose([]),
+                 yforms=transforms.Compose([]),
+                 augs=transforms.Compose([])):
         self.ann_dir = path.join(root_dir, "annotations", "trimaps")
         self.image_dir = path.join(root_dir, "images")
         self.image_files = glob.glob(path.join(self.image_dir, "*"))
@@ -34,7 +38,7 @@ class PetDataset(Dataset):
         self.image_files = [
             x for x in self.image_files if Image.open(x).mode == "RGB"
         ]
-        self.last_mrcnn_idx = 91
+        self.last_mrcnn_idx = 0
         unique_breeds = set([
             path.basename("_".join(fname.split("_")[:-1]))
             for fname in self.image_files

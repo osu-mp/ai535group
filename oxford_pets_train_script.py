@@ -7,7 +7,6 @@ import torchvision
 import torchvision.models.detection as det
 import torchvision.transforms as transforms
 import tqdm
-import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
@@ -47,9 +46,11 @@ class PetDataset(Dataset):
             x: self.last_mrcnn_idx + idx
             for idx, x in enumerate(sorted(list(unique_breeds)))
         }
+        self.id_to_breed = {v: k for k, v in self.breed_assoc.items()}
         self.num_classes = max([v for k, v in self.breed_assoc.items()]) + 1
         self.xforms = xforms
         self.yforms = yforms
+        self.augs = augs
 
     def __len__(self):
         return len(self.image_files)
@@ -62,34 +63,104 @@ class PetDataset(Dataset):
         image = self.xforms(Image.open(imf)).to(device)
 
         mask = self.yforms(Image.open(ann)).to(device)
+
+        all_channels = self.augs(torch.cat((image, mask), dim=0))
+        image = all_channels[:3]
+        mask = all_channels[3:]
+
         unnormed_mask = (mask * 300).floor()
         unnormed_boundary = (unnormed_mask == 3.0).to(torch.float)
         unnormed_interior = (unnormed_mask == 1.0).to(torch.float)
         unnormed_exterior = (unnormed_mask == 2.0).to(torch.float)
         mask = 0.5 * unnormed_boundary + unnormed_interior
 
-        category = path.basename("_".join(imf.split("_")[:-1]))
-        labels = torch.tensor([self.breed_assoc[category]
-                               ]).to(torch.int64).to(device)
-
         indices = torch.nonzero(mask.squeeze())
 
         if indices.numel() == 0:
             left_x = 0
             bottom_y = 0
-            right_x = 224
-            top_y = 224
-
+            right_x = 0
+            top_y = 0
         else:
             bottom_y = indices[:, 0].min()
             top_y = indices[:, 0].max()
             right_x = indices[:, 1].max()
             left_x = indices[:, 1].min()
 
-        boxes = torch.tensor([left_x, bottom_y, right_x,
-                              top_y]).unsqueeze(0).to(device)
+        # If one of the dims is 0 in the case of only a pixel in the mask
+        # due to cropping
+        if right_x - left_x == 0 or top_y - bottom_y == 0:
+            boxes = torch.empty(0, 4)
+            labels = torch.tensor([]).to(torch.int64)
+        else:
+            boxes = torch.tensor([left_x, bottom_y, right_x,
+                                  top_y]).unsqueeze(0).to(device)
+            category = path.basename("_".join(imf.split("_")[:-1]))
+            labels = torch.tensor([self.breed_assoc[category]]).to(torch.int64)
 
-        return image, {"boxes": boxes, "labels": labels, "masks": mask}
+        return image, {
+            "boxes": boxes.to(device),
+            "labels": labels.to(device),
+            "masks": mask.to(device)
+        }
+
+    def get_unchanged_pic(self, idx):
+        transformx = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406],
+                                 std=[0.229, 0.224, 0.225]),
+        ])
+        transformy = transforms.Compose([
+            transforms.ToTensor(),
+        ])
+        augs = transforms.Compose([
+            transforms.RandomHorizontalFlip(0.5),
+            transforms.RandomVerticalFlip(0.5),
+            transforms.RandomCrop(100)
+        ])
+        imf = self.image_files[idx]
+        bname = path.basename(path.splitext(imf)[0])
+        ann = path.join(self.ann_dir, bname) + ".png"
+
+        image = transformx(Image.open(imf)).to(device)
+
+        mask = transformy(Image.open(ann)).to(device)
+
+        unnormed_mask = (mask * 300).floor()
+        unnormed_boundary = (unnormed_mask == 3.0).to(torch.float)
+        unnormed_interior = (unnormed_mask == 1.0).to(torch.float)
+        unnormed_exterior = (unnormed_mask == 2.0).to(torch.float)
+        mask = 0.5 * unnormed_boundary + unnormed_interior
+
+        indices = torch.nonzero(mask.squeeze())
+
+        if indices.numel() == 0:
+            left_x = 0
+            bottom_y = 0
+            right_x = 0
+            top_y = 0
+        else:
+            bottom_y = indices[:, 0].min()
+            top_y = indices[:, 0].max()
+            right_x = indices[:, 1].max()
+            left_x = indices[:, 1].min()
+
+    # If one of the dims is 0 in the case of only a pixel in the mask
+    # due to cropping
+        if right_x - left_x == 0 or top_y - bottom_y == 0:
+            boxes = torch.empty(0, 4)
+            labels = torch.tensor([]).to(torch.int64)
+        else:
+            boxes = torch.tensor([left_x, bottom_y, right_x,
+                                  top_y]).unsqueeze(0).to(device)
+            category = path.basename("_".join(imf.split("_")[:-1]))
+            labels = torch.tensor([self.breed_assoc[category]]).to(torch.int64)
+
+        return image, {
+            "boxes": boxes.to(device),
+            "labels": labels.to(device),
+            "masks": mask.to(device)
+        }
 
 
 def gen_dataset(ds_path="."):
@@ -100,10 +171,15 @@ def gen_dataset(ds_path="."):
         transforms.Normalize(mean=[0.485, 0.456, 0.406],
                              std=[0.229, 0.224, 0.225]),
     ])
-    transformy = transforms.Compose(
-        [transforms.Resize((224, 224)),
-         transforms.ToTensor()])
-    augs = transforms.Compose([])
+    transformy = transforms.Compose([
+        transforms.Resize((224, 224)),
+        transforms.ToTensor(),
+    ])
+    augs = transforms.Compose([
+        transforms.RandomHorizontalFlip(0.5),
+        transforms.RandomVerticalFlip(0.5),
+        transforms.RandomCrop(100)
+    ])
     ds = PetDataset(ds_path, transformx, transformy, augs)
     train_len = int(0.8 * len(ds))
     test_len = len(ds) - train_len
@@ -173,7 +249,7 @@ def run_one_epoch(epoch, model, opt, dl, tl):
 
 def run_epochs(num_epochs=100):
     fs, ds, ts = gen_dataset()
-    dl, tl = gen_loaders(ds, ts)
+    dl, tl = gen_loaders(ds, ts, batch_size=16)
     model = gen_model(fs.num_classes)
     all_epoch_train_losses = []
     all_epoch_test_losses = []
